@@ -104,6 +104,21 @@ The account is chosen per request:
 Team billing is a header, not a separate account type: set `teamId` when adding, and the proxy
 sends `x-traycer-account-context: {"type":"TEAM","teamId":"..."}` instead of `PERSONAL`.
 
+### Credits and auto-rotation
+
+The dashboard's **Credits** block shows, per account, exactly what traycer.ai/billing shows:
+
+- promotional offers from `GET authn.traycer.ai/api/user/credit-campaigns`
+  (`$remaining` of `$grant`, claim state, time left, usage bar), and
+- `TOTAL CREDITS REMAINING` from `GET authn.traycer.ai/api/v3/user`
+  (`planRemaining + bundleRemaining + bonusRemaining`, i.e. `$0.000` while only a
+  promo is active — campaign credits are not part of that sum, same as on traycer.ai).
+
+Snapshots are cached for `CREDITS_CACHE_SECONDS` so the 2 s dashboard poll does not hammer
+authn. When the active account's promotional credits drop below `AUTO_ROTATE_THRESHOLD`
+(default `$5`), the proxy switches the active account to whichever other healthy account has
+the most promo remaining, and logs the rotation (`AUTO_ROTATE=false` disables it).
+
 ## Endpoints
 
 | path | auth | notes |
@@ -279,6 +294,10 @@ See `.env.example`. Every value has a working default.
 | `TRAYCER_SERVER` | `https://server.traycer.ai` | inference and catalog |
 | `TRAYCER_AUTHN` | `https://authn.traycer.ai` | token refresh |
 | `MODELS_CACHE_SECONDS` | `300` | catalog cache |
+| `CREDITS_CACHE_SECONDS` | `30` | per-account billing snapshot cache (dashboard Credits block) |
+| `AUTO_ROTATE` | `true` | rotate the active account when its promo credits fall below the threshold |
+| `AUTO_ROTATE_THRESHOLD` | `5` | promo-credit threshold in dollars that triggers rotation |
+| `ROTATE_CHECK_SECONDS` | `30` | how often the rotation check runs |
 | `REQUEST_LOG_SIZE` | `200` | dashboard request ring, `0` disables |
 | `LOG_REQUESTS` | `true` | one stdout line per proxied request |
 | `DEFAULT_ACCOUNT` | empty | fallback account name |
@@ -303,6 +322,7 @@ committed; `.gitignore` covers it.
 
 ```
 main.go          HTTP server, /v1 handlers, dashboard API, catalog cache
+credits.go       billing snapshot (campaigns + totals), cache, promo auto-rotation
 store.go         .env config, account store, proactive token refresh, request log
 authflow.go      OAuth device flow: authorize, poll, attempt state machine
 upstream.go      Traycer HTTP client: responses, models, refresh

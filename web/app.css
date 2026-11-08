@@ -499,6 +499,155 @@ ul,ol{list-style:none}
   color:var(--muted);
 }
 
+/* credits --------------------------------------------------------------- */
+.credits{display:block}
+.credit-card{
+  padding:1rem 0 1.25rem;
+  border-top:1px solid var(--rule);
+}
+.credit-head{
+  display:flex;
+  align-items:baseline;
+  gap:.5rem;
+  flex-wrap:wrap;
+}
+.credit-acct{
+  font-size:1rem;
+  line-height:1.45;
+  font-weight:550;
+  overflow-wrap:anywhere;
+}
+.credit-email{
+  min-width:0;
+  font-family:var(--font-mono);
+  font-size:.875rem;
+  line-height:1.4;
+  color:var(--muted);
+  overflow-wrap:anywhere;
+}
+.credit-id{
+  min-width:0;
+  font-family:var(--font-mono);
+  font-size:.8125rem;
+  line-height:1.4;
+  color:var(--muted-2);
+  overflow-wrap:anywhere;
+  white-space:nowrap;
+}
+.credit-plan{
+  margin-left:auto;
+  font-family:var(--font-mono);
+  font-size:.875rem;
+  line-height:1.4;
+  color:var(--muted);
+  white-space:nowrap;
+}
+.badge{
+  display:inline-block;
+  margin-left:.375rem;
+  padding:.0625rem .5rem;
+  border:1px solid var(--rule-strong);
+  border-radius:999px;
+  font-size:.75rem;
+  line-height:1.5;
+  color:var(--muted);
+  vertical-align:middle;
+  white-space:nowrap;
+}
+.badge-active{border-color:var(--fg);color:var(--fg)}
+.credit-total{
+  display:flex;
+  align-items:baseline;
+  gap:.75rem;
+  flex-wrap:wrap;
+  margin-top:.75rem;
+}
+.credit-total-label{
+  font-size:.8125rem;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--muted);
+}
+.credit-total-amount{
+  font-size:1.5rem;
+  font-weight:600;
+  letter-spacing:-.01em;
+  font-variant-numeric:tabular-nums;
+}
+.credit-error{
+  margin-top:.5rem;
+  font-size:.875rem;
+  line-height:1.4;
+  color:var(--danger);
+  overflow-wrap:anywhere;
+}
+.credit-none{margin-top:.5rem;font-size:.875rem;color:var(--muted)}
+.campaigns{
+  margin-top:1rem;
+  display:flex;
+  flex-direction:column;
+  gap:.875rem;
+  list-style:none;
+}
+.campaign{
+  padding:.875rem;
+  border:1px solid var(--rule);
+  border-radius:6px;
+}
+.campaign-top{
+  display:flex;
+  align-items:baseline;
+  gap:.5rem;
+  flex-wrap:wrap;
+}
+.campaign-amount{
+  font-size:1.25rem;
+  font-weight:600;
+  font-variant-numeric:tabular-nums;
+}
+.campaign-name-wrap{
+  display:inline-flex;
+  align-items:center;
+  min-width:0;
+}
+.campaign-name{
+  font-size:.9375rem;
+  font-weight:550;
+  line-height:1.45;
+  overflow-wrap:anywhere;
+}
+.campaign-left{
+  margin-left:auto;
+  font-family:var(--font-mono);
+  font-size:.8125rem;
+  line-height:1.4;
+  color:var(--muted);
+  white-space:nowrap;
+}
+.campaign-sub{
+  display:flex;
+  gap:.5rem;
+  flex-wrap:wrap;
+  margin-top:.25rem;
+  font-size:.875rem;
+  line-height:1.4;
+  color:var(--muted);
+}
+.credit-bar{
+  margin-top:.625rem;
+  height:6px;
+  border-radius:3px;
+  background:var(--rule);
+  overflow:hidden;
+}
+.credit-bar-fill{
+  display:block;
+  height:100%;
+  border-radius:3px;
+  background:var(--fg);
+}
+
 /* models ---------------------------------------------------------------- */
 .filter{margin-bottom:.25rem}
 .models{margin-top:.75rem}

@@ -33,19 +33,48 @@
         activeId: "a1b2",
         accounts: [
           {
-            id: "a1b2", name: "work", email: "me@x.dev", plan: "PRO",
+            id: "a1b2", name: "work", email: "me@x.dev", handle: "me-x-dev", plan: "PRO",
             status: "ok", lastError: "", expiresInSeconds: 812,
-            addedAt: "2026-01-01T00:00:00Z", active: true
+            addedAt: "2026-01-01T00:00:00Z", active: true,
+            credits: {
+              plan: "PRO", email: "me@x.dev", hasPaymentMethod: true,
+              planTotal: 37.5, planRemaining: 37.5,
+              bundleTotal: 0, bundleRemaining: 0,
+              bonusTotal: 0, bonusRemaining: 0,
+              totalRemaining: 37.5,
+              campaigns: [{
+                id: "camp-1", name: "Gemini Weekend",
+                description: "2 days. $100. Any Gemini models.",
+                grantCredits: 100, remainingCredits: 99.938,
+                startsAt: ago(86400),
+                endsAt: new Date(now + 20.6 * 3600 * 1000).toISOString(),
+                claim: "active"
+              }]
+            }
           },
           {
-            id: "c3d4", name: "personal", email: "me@home.dev", plan: "FREE",
+            id: "c3d4", name: "personal", email: "me@home.dev", handle: "me-home", plan: "FREE",
             status: "expired", lastError: "", expiresInSeconds: 0,
-            addedAt: "2026-01-02T00:00:00Z", active: false
+            addedAt: "2026-01-02T00:00:00Z", active: false,
+            credits: {
+              plan: "FREE", email: "me@home.dev", hasPaymentMethod: false,
+              planTotal: 0, planRemaining: 0,
+              bundleTotal: 0, bundleRemaining: 0,
+              bonusTotal: 0, bonusRemaining: 0,
+              totalRemaining: 0, campaigns: []
+            }
           },
           {
-            id: "e5f6", name: "lab", email: "lab@x.dev", plan: "TEAM",
+            id: "e5f6", name: "lab", email: "lab@x.dev", handle: "lab-x-dev", plan: "TEAM",
             status: "error", lastError: "needs reauth", expiresInSeconds: 0,
-            addedAt: "2026-01-03T00:00:00Z", active: false
+            addedAt: "2026-01-03T00:00:00Z", active: false,
+            credits: {
+              plan: "TEAM", email: "lab@x.dev", hasPaymentMethod: false,
+              planTotal: 0, planRemaining: 0,
+              bundleTotal: 0, bundleRemaining: 0,
+              bonusTotal: 0, bonusRemaining: 0,
+              totalRemaining: 0, campaigns: [], error: "needs reauth"
+            }
           }
         ],
         models: [
@@ -124,8 +153,9 @@
       const st = this.state;
       const id = `demo-${st.accounts.length + 1}-${Math.random().toString(16).slice(2, 6)}`;
       const account = {
-        id, name, email: "", plan: "", status: "ok", lastError: "",
-        expiresInSeconds: 900, addedAt: new Date().toISOString(), active: false
+        id, name, email: "", handle: "", plan: "", status: "ok", lastError: "",
+        expiresInSeconds: 900, addedAt: new Date().toISOString(), active: false,
+        credits: { plan: "", totalRemaining: 0, campaigns: [] }
       };
       st.accounts.push(account);
       if (!st.activeId) {
@@ -162,6 +192,10 @@
     accountsCount: $("accounts-count"),
     accountsError: $("accounts-error"),
     accountsList: $("accounts-list"),
+    creditsCount: $("credits-count"),
+    creditsHint: $("credits-hint"),
+    creditsList: $("credits-list"),
+    creditsEmpty: $("credits-empty"),
     addDetails: $("add-details"),
     addForm: $("add-form"),
     addName: $("add-name"),
@@ -227,7 +261,7 @@
     demoThis: 0,
     startedAt: 0
   };
-  const keys = { meta: "", accounts: "", models: "", requests: "" };
+  const keys = { meta: "", accounts: "", models: "", requests: "", credits: "" };
   const copyButtons = Array.from(document.querySelectorAll("[data-copy]"));
 
   function el(tag, className, textContent) {
@@ -291,6 +325,32 @@
     return [date.getHours(), date.getMinutes(), date.getSeconds()]
       .map((n) => String(n).padStart(2, "0"))
       .join(":");
+  }
+
+  function formatMoney(value, decimals = 3) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "$" + (0).toFixed(decimals);
+    return "$" + n.toFixed(decimals);
+  }
+
+  function formatGrant(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "$0";
+    if (Number.isInteger(n)) return "$" + String(n);
+    return "$" + n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  }
+
+  function formatCreditsLeft(endsAt) {
+    const end = new Date(endsAt).getTime();
+    if (Number.isNaN(end)) return "";
+    const ms = end - Date.now();
+    if (ms <= 0) return "Ended";
+    const totalMinutes = Math.floor(ms / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours >= 48) return `${Math.floor(hours / 24)}d ${hours % 24}h left`;
+    if (hours > 0) return `${hours}h ${minutes}m left`;
+    return `${minutes}m ${Math.floor(ms / 1000) % 60}s left`;
   }
 
   function hostname(value) {
@@ -449,13 +509,16 @@
     } else if (rawStatus !== "ok") {
       status = rawStatus;
     }
+    const handle = a.handle ? String(a.handle) : "";
     return {
       id,
       name,
       active,
       status,
       bad,
-      meta: [email, plan].filter(Boolean).join(" · ")
+      // email/handle come from Traycer once known; the id is always there, so
+      // accounts stay distinguishable even when labels collide.
+      meta: [email, handle, plan, id ? `id ${id}` : ""].filter(Boolean).join(" · ")
     };
   }
 
@@ -545,6 +608,110 @@
       });
     }
     restoreFocus(focused);
+  }
+
+  function campaignRow(camp) {
+    const c = camp && typeof camp === "object" ? camp : {};
+    const grant = Number(c.grantCredits);
+    const grantSafe = Number.isFinite(grant) && grant > 0 ? grant : 0;
+    const remaining = Number.isFinite(Number(c.remainingCredits)) ? Number(c.remainingCredits) : grantSafe;
+    const used = Math.max(0, Math.min(grantSafe, grantSafe - remaining));
+
+    const li = el("li", "campaign");
+
+    const top = el("div", "campaign-top");
+    top.appendChild(el("span", "campaign-amount", formatMoney(remaining)));
+    const nameWrap = el("span", "campaign-name-wrap");
+    nameWrap.appendChild(el("span", "campaign-name", c.name ? String(c.name) : "Promotion"));
+    if (c.claim === "active") nameWrap.appendChild(el("span", "badge", "Claimed"));
+    top.appendChild(nameWrap);
+    const left = formatCreditsLeft(c.endsAt);
+    if (left) top.appendChild(el("span", "campaign-left", left));
+    li.appendChild(top);
+
+    const sub = el("div", "campaign-sub");
+    sub.appendChild(el("span", "campaign-of", `of ${formatGrant(grantSafe)}`));
+    if (c.description) sub.appendChild(el("span", "campaign-desc", String(c.description)));
+    li.appendChild(sub);
+
+    const bar = el("div", "credit-bar");
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", String(grantSafe));
+    bar.setAttribute("aria-valuenow", String(used));
+    bar.setAttribute("aria-label", `${c.name ? String(c.name) : "Promotion"} credit used`);
+    const fill = el("span", "credit-bar-fill");
+    fill.style.width = `${grantSafe > 0 ? Math.min(100, (used / grantSafe) * 100) : 0}%`;
+    bar.appendChild(fill);
+    li.appendChild(bar);
+    return li;
+  }
+
+  function renderCredits(force = false) {
+    if (!state) return;
+    const accounts = Array.isArray(state.accounts) ? state.accounts : [];
+    const key = JSON.stringify(accounts.map((a) => (a && typeof a === "object")
+      ? { id: a.id, active: a.active, credits: a.credits || null }
+      : null));
+    els.creditsCount.textContent = String(accounts.length);
+    if (!force && key === keys.credits) return;
+    keys.credits = key;
+
+    els.creditsList.textContent = "";
+    els.creditsEmpty.hidden = accounts.length !== 0;
+    accounts.forEach((account) => {
+      const a = account && typeof account === "object" ? account : {};
+      const c = a.credits && typeof a.credits === "object" ? a.credits : null;
+      const card = el("li", "credit-card");
+      card.dataset.id = a.id != null ? String(a.id) : "";
+
+      const head = el("div", "credit-head");
+      const name = el("span", "credit-acct", a.name ? String(a.name) : "account");
+      const activeId = state.activeId != null ? String(state.activeId) : "";
+      if (activeId && String(a.id) === activeId) name.appendChild(el("span", "badge badge-active", "active"));
+      head.appendChild(name);
+      const ident = (c && (c.email || c.handle)) || a.email || a.handle;
+      if (ident) head.appendChild(el("span", "credit-email", String(ident)));
+      if (a.id != null && String(a.id) !== "") head.appendChild(el("span", "credit-id", `id ${String(a.id)}`));
+      if (c && c.plan) head.appendChild(el("span", "credit-plan", String(c.plan)));
+      card.appendChild(head);
+
+      const total = el("div", "credit-total");
+      total.appendChild(el("span", "credit-total-label", "Total Credits Remaining"));
+      total.appendChild(el("span", "credit-total-amount", c ? formatMoney(c.totalRemaining) : "—"));
+      card.appendChild(total);
+
+      if (c && c.error) {
+        card.appendChild(el("p", "credit-error", String(c.error)));
+      }
+
+      const campaigns = c && Array.isArray(c.campaigns) ? c.campaigns : [];
+      if (campaigns.length) {
+        const list = el("ul", "campaigns");
+        campaigns.forEach((camp) => list.appendChild(campaignRow(camp)));
+        card.appendChild(list);
+      } else if (c && !c.error) {
+        card.appendChild(el("p", "credit-none", "No credits available."));
+      }
+      els.creditsList.appendChild(card);
+    });
+  }
+
+  function renderCreditsHint() {
+    if (!state) return;
+    const cfg = state.config || {};
+    els.creditsHint.textContent = "";
+    els.creditsHint.appendChild(document.createTextNode("Live from Traycer's billing API ("));
+    els.creditsHint.appendChild(el("code", null, "/api/user/credit-campaigns"));
+    els.creditsHint.appendChild(document.createTextNode(" and "));
+    els.creditsHint.appendChild(el("code", null, "/api/v3/user"));
+    els.creditsHint.appendChild(document.createTextNode(" on authn.traycer.ai)."));
+    if (cfg.autoRotate) {
+      const threshold = Number.isFinite(Number(cfg.rotateThreshold)) ? formatGrant(cfg.rotateThreshold) : "$5";
+      els.creditsHint.appendChild(document.createTextNode(
+        ` When the active account's promotional credits drop below ${threshold}, the active account auto-rotates to the account with the most promo left.`
+      ));
+    }
   }
 
   function applyModelFilter() {
@@ -672,6 +839,8 @@
     }
     renderMeta();
     renderAccounts();
+    renderCredits();
+    renderCreditsHint();
     renderModels();
     renderRequests();
   }
@@ -687,6 +856,8 @@
     renderEndpoint();
     renderMeta();
     renderAccounts(true);
+    renderCredits(true);
+    renderCreditsHint();
     renderModels(true);
     renderRequests(true);
     els.app.hidden = false;
@@ -702,6 +873,7 @@
     keys.accounts = "";
     keys.models = "";
     keys.requests = "";
+    keys.credits = "";
     failures = 0;
     els.app.hidden = true;
     els.auth.hidden = false;
@@ -1155,9 +1327,10 @@
     const name = a.name ? String(a.name) : (device.label || "Traycer account");
     st.accounts = st.accounts.filter((item) => String(item.id) !== id);
     st.accounts.push({
-      id, name, email: "you@traycer.ai", plan: "PRO",
+      id, name, email: "you@traycer.ai", handle: "you-traycer", plan: "PRO",
       status: "ok", lastError: "", expiresInSeconds: 3600,
-      addedAt: new Date().toISOString(), active: true
+      addedAt: new Date().toISOString(), active: true,
+      credits: { plan: "PRO", email: "you@traycer.ai", handle: "you-traycer", totalRemaining: 0, campaigns: [] }
     });
     st.activeId = id;
     st.accounts.forEach((item) => { item.active = String(item.id) === id; });

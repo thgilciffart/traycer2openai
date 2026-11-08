@@ -227,6 +227,53 @@ deepseek-v4-pro, kimi-k3, kimi-k2.6, kimi-k2.7-code.
 
 `provider` values seen: `openai`, `anthropic`, `xai`, `meta`, `gemini`, `openrouter`.
 
+## Billing / credits (authn) — what traycer.ai/billing shows
+
+Both endpoints live on `authn.traycer.ai`, take the same headers as inference
+(`authorization: Bearer <access token>`, `x-traycer-account-context`), and were
+confirmed live with a **host** token (`aud: host`):
+
+```
+GET https://authn.traycer.ai/api/user/credit-campaigns
+GET https://authn.traycer.ai/api/v3/user
+```
+
+`credit-campaigns` is the billing page's "Credit offers" card (the `$99.938 of $100`
+promo):
+
+```json
+{"campaigns":[{"id":"…","name":"Gemini Weekend","description":"2 days. $100. Any Gemini models.",
+  "grantCredits":100,"startsAt":"…","endsAt":"…","claim":"active","remainingCredits":99.938}]}
+```
+
+`claim` is `"active"` once claimed, `"none"` before; `remainingCredits` drains as the
+promo is spent.
+
+`api/v3/user` returns the same `userSubscription` shape the web app reads from
+`api/v2/user`, and the web-only endpoints reject host tokens:
+
+```
+GET /api/v2/user            -> 401 {"statusCode":401,"error":"Invalid token"}   (web session token only)
+GET /api/user/subscription  -> 401 with a host token
+GET /api/v3/user            -> 200 with a host token
+```
+
+`userSubscription` carries the "TOTAL CREDITS REMAINING" inputs:
+
+```json
+{"subscriptionStatus":"FREE","hasPaymentMethod":false,
+ "bundleSummary":{"bundleTotal":0,"bundleConsumed":0,"bundleRemaining":0},
+ "totalPlanCredits":0,
+ "credit":{"bonusCredits":0,"consumedFromPlan":0,"consumedFromBonus":0}}
+```
+
+Traycer's own billing page (pricing-utils) computes the displayed total as
+`planRemaining + bundleRemaining + bonusRemaining` with
+`planRemaining = max(0, totalPlanCredits - consumedFromPlan)` and
+`bonusRemaining = max(0, bonusCredits - consumedFromBonus)`. Campaign credits are
+**not** part of that sum — an account with only a promo shows `$0.000` next to a
+`$99.938` offer, exactly like the screenshot.
+
 ## How Traycer itself calls it
 
 The host spawns a local OpenCode server configured with `baseURL = serverBaseUrl + "/inference/openai"`

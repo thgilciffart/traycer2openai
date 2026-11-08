@@ -7,3 +7,6 @@ traycer2openai
 
 # build output
 /dist/
+
+# captured traffic contains tokens/cookies; never commit
+*.har

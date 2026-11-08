@@ -32,6 +32,10 @@ type Config struct {
 	DefaultAccount  string
 	DefaultModel    string
 	UpstreamTimeout time.Duration
+	CreditsCache    time.Duration
+	AutoRotate      bool
+	RotateThreshold float64
+	RotateCheck     time.Duration
 }
 
 func LoadConfig(dir string) (*Config, error) {
@@ -48,6 +52,10 @@ func LoadConfig(dir string) (*Config, error) {
 		LogRequests:     true,
 		DefaultModel:    "gemini-3.8-flash",
 		UpstreamTimeout: 600 * time.Second,
+		CreditsCache:    30 * time.Second,
+		AutoRotate:      true,
+		RotateThreshold: 5.0,
+		RotateCheck:     30 * time.Second,
 	}
 
 	vals := map[string]string{}
@@ -61,7 +69,8 @@ func LoadConfig(dir string) (*Config, error) {
 	for _, k := range []string{
 		"BIND", "PORT", "LOGIN_TOKEN", "API_AUTH", "ACCOUNTS_FILE", "TRAYCER_SERVER", "TRAYCER_AUTHN",
 		"MODELS_CACHE_SECONDS", "REQUEST_LOG_SIZE", "LOG_REQUESTS", "DEFAULT_ACCOUNT",
-		"DEFAULT_MODEL", "UPSTREAM_TIMEOUT_SECONDS",
+		"DEFAULT_MODEL", "UPSTREAM_TIMEOUT_SECONDS", "CREDITS_CACHE_SECONDS", "AUTO_ROTATE",
+		"AUTO_ROTATE_THRESHOLD", "ROTATE_CHECK_SECONDS",
 	} {
 		if v, ok := os.LookupEnv(k); ok {
 			vals[k] = v
@@ -84,6 +93,18 @@ func LoadConfig(dir string) (*Config, error) {
 	}
 	if v, ok := parseInt(vals["UPSTREAM_TIMEOUT_SECONDS"]); ok {
 		cfg.UpstreamTimeout = time.Duration(v) * time.Second
+	}
+	if v, ok := parseInt(vals["CREDITS_CACHE_SECONDS"]); ok {
+		cfg.CreditsCache = time.Duration(v) * time.Second
+	}
+	if v, ok := parseInt(vals["ROTATE_CHECK_SECONDS"]); ok {
+		cfg.RotateCheck = time.Duration(v) * time.Second
+	}
+	if v, ok := parseFloat(vals["AUTO_ROTATE_THRESHOLD"]); ok {
+		cfg.RotateThreshold = v
+	}
+	if v, ok := parseBool(vals["AUTO_ROTATE"]); ok {
+		cfg.AutoRotate = v
 	}
 	if v, ok := parseBool(vals["LOG_REQUESTS"]); ok {
 		cfg.LogRequests = v
@@ -118,6 +139,18 @@ func parseInt(v string) (int, bool) {
 		return 0, false
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func parseFloat(v string) (float64, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return 0, false
 	}
@@ -164,6 +197,7 @@ type Account struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
 	Email        string    `json:"email,omitempty"`
+	Handle       string    `json:"handle,omitempty"` // providerHandle, e.g. GitHub username
 	Plan         string    `json:"plan,omitempty"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refreshToken,omitempty"`
@@ -574,6 +608,29 @@ func (s *Store) Refresh(ctx context.Context, a *Account, force bool) error {
 	a.LastError = ""
 	s.mu.Unlock()
 	return s.Save()
+}
+
+// NoteIdentity records the account's email and provider handle (learned from
+// /api/v3/user) when they changed, and persists once. Empty values never
+// overwrite. The dashboard shows these so accounts are distinguishable even
+// when several share a label.
+func (s *Store) NoteIdentity(a *Account, email, handle string) {
+	email = strings.TrimSpace(email)
+	handle = strings.TrimSpace(handle)
+	s.mu.Lock()
+	changed := false
+	if email != "" && a.Email != email {
+		a.Email = email
+		changed = true
+	}
+	if handle != "" && a.Handle != handle {
+		a.Handle = handle
+		changed = true
+	}
+	s.mu.Unlock()
+	if changed {
+		_ = s.Save()
+	}
 }
 
 func (s *Store) markError(a *Account, msg string) {

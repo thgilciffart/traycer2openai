@@ -40,6 +40,9 @@ type Server struct {
 	modelsAt  time.Time
 	modelsErr error
 
+	creditsMu sync.Mutex
+	credits   map[string]*creditsState
+
 	devices *deviceAttempts
 	sigs    *sigCache
 
@@ -65,12 +68,14 @@ func main() {
 		started: time.Now(),
 		devices: newDeviceAttempts(),
 		sigs:    newSigCache(),
+		credits: map[string]*creditsState{},
 		logger:  logger,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go store.RefreshLoop(ctx)
+	go srv.rotationLoop(ctx)
 
 	handler := srv.routes()
 	httpSrv := &http.Server{
@@ -502,16 +507,35 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	active := s.store.ActiveID()
 
 	type accView struct {
-		ID               string `json:"id"`
-		Name             string `json:"name"`
-		Email            string `json:"email"`
-		Plan             string `json:"plan"`
-		Status           string `json:"status"`
-		LastError        string `json:"lastError"`
-		ExpiresInSeconds int    `json:"expiresInSeconds"`
-		AddedAt          string `json:"addedAt"`
-		Active           bool   `json:"active"`
+		ID               string   `json:"id"`
+		Name             string   `json:"name"`
+		Email            string   `json:"email"`
+		Handle           string   `json:"handle"`
+		Plan             string   `json:"plan"`
+		Status           string   `json:"status"`
+		LastError        string   `json:"lastError"`
+		ExpiresInSeconds int      `json:"expiresInSeconds"`
+		AddedAt          string   `json:"addedAt"`
+		Active           bool     `json:"active"`
+		Credits          *Credits `json:"credits,omitempty"`
 	}
+	// Billing snapshots are cached server-side (CREDITS_CACHE_SECONDS), so the
+	// 2 s dashboard poll does not hammer authn.traycer.ai; fetch all accounts
+	// concurrently so one slow account cannot stall the whole state response.
+	creditOf := make(map[string]*Credits, len(accs))
+	var cmu sync.Mutex
+	var cwg sync.WaitGroup
+	for _, a := range accs {
+		cwg.Add(1)
+		go func(a *Account) {
+			defer cwg.Done()
+			c := s.creditsForAccount(r.Context(), a)
+			cmu.Lock()
+			creditOf[a.ID] = c
+			cmu.Unlock()
+		}(a)
+	}
+	cwg.Wait()
 	av := make([]accView, 0, len(accs))
 	for _, a := range accs {
 		st := a.Status
@@ -522,9 +546,9 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 			st = statusExpired
 		}
 		av = append(av, accView{
-			ID: a.ID, Name: a.Name, Email: a.Email, Plan: a.Plan, Status: st,
+			ID: a.ID, Name: a.Name, Email: a.Email, Handle: a.Handle, Plan: a.Plan, Status: st,
 			LastError: a.LastError, ExpiresInSeconds: a.ExpiresIn(), AddedAt: a.AddedAt.UTC().Format(time.RFC3339),
-			Active: a.ID == active,
+			Active: a.ID == active, Credits: creditOf[a.ID],
 		})
 	}
 	if models == nil {
@@ -537,9 +561,11 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 			"port":          s.cfg.Port,
 			"server":        s.cfg.TraycerServer,
 			"accountsFile":  s.cfg.AccountsFile,
-			"defaultModel":  s.cfg.DefaultModel,
-			"apiAuth":       s.cfg.APIAuth && s.cfg.LoginToken != "",
-			"uptimeSeconds": int(time.Since(s.started).Seconds()),
+			"defaultModel":    s.cfg.DefaultModel,
+			"apiAuth":         s.cfg.APIAuth && s.cfg.LoginToken != "",
+			"uptimeSeconds":   int(time.Since(s.started).Seconds()),
+			"autoRotate":      s.cfg.AutoRotate,
+			"rotateThreshold": s.cfg.RotateThreshold,
 		},
 		"activeId": active,
 		"accounts": av,
