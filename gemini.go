@@ -30,21 +30,67 @@ const skipSignature = "skip_thought_signature_validator"
 
 // geminiSchemaKeys are JSON Schema keywords Gemini rejects in function declarations.
 var geminiSchemaKeys = map[string]bool{
-	"$schema":              true,
-	"additionalProperties": true,
-	"$id":                  true,
-	"$defs":                true,
+	"$schema":               true,
+	"$id":                   true,
+	"$defs":                 true,
+	"$ref":                  true,
+	"additionalProperties":  true,
+	"examples":              true,
+	"default":               true,
+	"not":                   true,
+	"patternProperties":     true,
+	"dependencies":          true,
+	"propertyNames":         true,
+	"unevaluatedProperties": true,
 }
 
+// scrubGeminiSchema rewrites a JSON Schema into the OpenAPI subset Gemini accepts:
+// const becomes enum, a union of constants collapses into one enum, nullable type
+// arrays become type plus nullable, and keywords Gemini refuses are dropped.
 func scrubGeminiSchema(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
+			switch k {
+			case "const":
+				out["enum"] = []any{scrubGeminiSchema(val)}
+				continue
+			case "anyOf", "oneOf":
+				for mk, mv := range geminiUnion(t, k) {
+					out[mk] = mv
+				}
+				continue
+			case "allOf":
+				// Intersection: fold every branch into one flat schema.
+				for _, branch := range wireSlice(val) {
+					for mk, mv := range wireMap(scrubGeminiSchema(branch)) {
+						out[mk] = mv
+					}
+				}
+				continue
+			}
 			if geminiSchemaKeys[k] {
 				continue
 			}
 			out[k] = scrubGeminiSchema(val)
+		}
+		if arr, ok := out["type"].([]any); ok {
+			var rest []any
+			nullable := false
+			for _, item := range arr {
+				if s, _ := item.(string); s == "null" {
+					nullable = true
+					continue
+				}
+				rest = append(rest, item)
+			}
+			if len(rest) == 1 {
+				out["type"] = rest[0]
+				if nullable {
+					out["nullable"] = true
+				}
+			}
 		}
 		return out
 	case []any:
@@ -55,6 +101,49 @@ func scrubGeminiSchema(v any) any {
 		return out
 	}
 	return v
+}
+
+// geminiUnion turns a union of constant branches into a single enum. For richer
+// unions it keeps the first branch, which is still a schema Gemini accepts.
+func geminiUnion(parent map[string]any, key string) map[string]any {
+	branches := wireSlice(parent[key])
+	enums := make([]any, 0, len(branches))
+	allConst := len(branches) > 0
+	for _, raw := range branches {
+		branch := wireMap(scrubGeminiSchema(raw))
+		if branch == nil {
+			allConst = false
+			break
+		}
+		for k := range branch {
+			if k != "enum" && k != "description" && k != "title" {
+				allConst = false
+			}
+		}
+		vals := wireSlice(branch["enum"])
+		if len(vals) == 0 {
+			allConst = false
+			break
+		}
+		enums = append(enums, vals...)
+	}
+	if allConst {
+		out := map[string]any{"enum": enums}
+		if d, ok := parent["description"].(string); ok && d != "" {
+			out["description"] = d
+		}
+		return out
+	}
+	first := wireMap(scrubGeminiSchema(branches[0]))
+	if first == nil {
+		return map[string]any{}
+	}
+	if d, ok := parent["description"].(string); ok && d != "" {
+		if _, has := first["description"]; !has {
+			first["description"] = d
+		}
+	}
+	return first
 }
 
 func geminiTextParts(content any) []any {
