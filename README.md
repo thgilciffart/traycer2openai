@@ -139,7 +139,17 @@ and payload shapes, extracted from the shipped binaries and confirmed with live 
 capture only when you want to see Traycer's own request/response bytes, for example to confirm the
 Responses streaming event sequence against a paid account.
 
-Two facts make this easy, both verified in the installed host runtime:
+The proxy itself honours `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`, so pointing its upstream
+traffic at mitmproxy needs no code change:
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:8080 ./traycer2openai
+```
+
+If you only want to see the Traycer app and not the proxy, leave those unset for the proxy and set
+them only on the app's command line.
+
+Two facts make the app easy to capture, both verified in the installed host runtime:
 
 - Traycer's inference calls come from a **Node host process** that builds an
   `EnvHttpProxyAgent` from `HTTPS_PROXY` / `NO_PROXY`, so environment variables are enough.

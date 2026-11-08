@@ -37,6 +37,10 @@ func NewUpstream(server, authn string, timeout time.Duration) *Upstream {
 		timeout = 30 * time.Second
 	}
 	transport := &http.Transport{
+		// Honour HTTP_PROXY / HTTPS_PROXY / NO_PROXY. Go does not read these on
+		// its own, so without this the binary silently bypasses a debugging proxy
+		// (mitmproxy) even when the environment asks for one.
+		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
