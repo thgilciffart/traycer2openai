@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"embed"
@@ -269,7 +270,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var meta struct {
 		Model string `json:"model"`
 	}
-	_ = json.Unmarshal(body, &meta)
+	// Decode the first JSON value rather than requiring the whole body to be
+	// clean: a stray trailing byte should not silently downgrade the model used
+	// for logging and the response echo.
+	if dec := json.NewDecoder(bytes.NewReader(body)); dec.Decode(&meta) != nil || meta.Model == "" {
+		_ = json.Unmarshal(body, &meta)
+	}
 	model := meta.Model
 	if model == "" {
 		model = s.cfg.DefaultModel

@@ -29,19 +29,19 @@ import (
 const skipSignature = "skip_thought_signature_validator"
 
 // geminiSchemaKeys are JSON Schema keywords Gemini rejects in function declarations.
-var geminiSchemaKeys = map[string]bool{
-	"$schema":               true,
-	"$id":                   true,
-	"$defs":                 true,
-	"$ref":                  true,
-	"additionalProperties":  true,
-	"examples":              true,
-	"default":               true,
-	"not":                   true,
-	"patternProperties":     true,
-	"dependencies":          true,
-	"propertyNames":         true,
-	"unevaluatedProperties": true,
+// geminiSchemaAllowed is an allowlist of the JSON Schema keywords Gemini's Schema
+// object accepts. A denylist was the wrong shape: every client invents another
+// keyword (const, exclusiveMinimum, if/then, ...) and Gemini 400s on all of them.
+// Anything not listed here is dropped, so an unknown keyword can never break a
+// request. Rewrites that need semantics (const, allOf, type arrays) are handled
+// before this check.
+var geminiSchemaAllowed = map[string]bool{
+	"type": true, "format": true, "title": true, "description": true,
+	"nullable": true, "enum": true, "items": true, "properties": true,
+	"required": true, "minItems": true, "maxItems": true,
+	"minProperties": true, "maxProperties": true, "minimum": true, "maximum": true,
+	"minLength": true, "maxLength": true, "pattern": true, "example": true,
+	"anyOf": true, "propertyOrdering": true,
 }
 
 // scrubGeminiSchema rewrites a JSON Schema into the OpenAPI subset Gemini accepts:
@@ -54,7 +54,7 @@ func scrubGeminiSchema(v any) any {
 		for k, val := range t {
 			switch k {
 			case "const":
-				out["enum"] = []any{scrubGeminiSchema(val)}
+				out["enum"] = []any{val}
 				continue
 			case "anyOf", "oneOf":
 				for mk, mv := range geminiUnion(t, k) {
@@ -69,11 +69,54 @@ func scrubGeminiSchema(v any) any {
 					}
 				}
 				continue
+			case "exclusiveMinimum":
+				// Gemini has no exclusive bounds; a plain bound is the closest
+				// it accepts.
+				if _, has := t["minimum"]; !has {
+					out["minimum"] = val
+				}
+				continue
+			case "exclusiveMaximum":
+				if _, has := t["maximum"]; !has {
+					out["maximum"] = val
+				}
+				continue
+			case "properties":
+				// Property names are user data, not keywords: recurse into the
+				// values and keep every name.
+				props := map[string]any{}
+				for pk, pv := range wireMap(val) {
+					props[pk] = scrubGeminiSchema(pv)
+				}
+				out["properties"] = props
+				continue
+			case "items":
+				out["items"] = scrubGeminiSchema(val)
+				continue
 			}
-			if geminiSchemaKeys[k] {
+			if !geminiSchemaAllowed[k] {
 				continue
 			}
 			out[k] = scrubGeminiSchema(val)
+		}
+		// Gemini validates that every required name exists in properties. Clients
+		// (and our own allOf folding) produce required lists without a matching
+		// property, which is a 400 upstream.
+		if req, ok := out["required"].([]any); ok {
+			props, _ := out["properties"].(map[string]any)
+			kept := make([]any, 0, len(req))
+			for _, name := range req {
+				if s, ok := name.(string); ok {
+					if _, exists := props[s]; exists {
+						kept = append(kept, name)
+					}
+				}
+			}
+			if len(kept) == 0 {
+				delete(out, "required")
+			} else {
+				out["required"] = kept
+			}
 		}
 		if arr, ok := out["type"].([]any); ok {
 			var rest []any
@@ -319,6 +362,22 @@ func ChatToGemini(body []byte, sigFor func(string) string) (out []byte, stream b
 		gen["thinkingConfig"] = map[string]any{"thinkingLevel": geminiEffort(effort), "includeThoughts": false}
 	} else if n, ok := numAsInt(gen["maxOutputTokens"]); ok && n > 0 && n < 512 {
 		gen["thinkingConfig"] = map[string]any{"thinkingBudget": 0, "includeThoughts": false}
+	}
+	// JSON mode is a generationConfig concern in Gemini, not a top-level field.
+	if rf := wireMap(req["response_format"]); rf != nil {
+		switch t, _ := rf["type"].(string); t {
+		case "json_object":
+			gen["responseMimeType"] = "application/json"
+		case "json_schema":
+			js := wireMap(rf["json_schema"])
+			if js == nil {
+				js = rf
+			}
+			gen["responseMimeType"] = "application/json"
+			if schema, ok := js["schema"]; ok && schema != nil {
+				gen["responseSchema"] = scrubGeminiSchema(schema)
+			}
+		}
 	}
 	if len(gen) > 0 {
 		gReq["generationConfig"] = gen
@@ -717,7 +776,14 @@ func (s *Server) handleGeminiChat(w http.ResponseWriter, r *http.Request, start 
 		callCtx, cancel = context.WithTimeout(r.Context(), s.cfg.UpstreamTimeout)
 		defer cancel()
 	}
+	// Traycer's inference route occasionally answers 5xx under load (an 84s
+	// "Internal Server Error" was observed once). One retry before any bytes are
+	// written turns that into a normal turn instead of a failed request.
 	resp, err := s.up.GeminiStream(callCtx, acct, model, reqBody)
+	if err == nil && resp.StatusCode >= 500 {
+		resp.Body.Close()
+		resp, err = s.up.GeminiStream(callCtx, acct, model, reqBody)
+	}
 	if err != nil {
 		s.record(acct, model, stream, http.StatusBadGateway, start, 0, 0, err.Error())
 		oaiError(w, http.StatusBadGateway, "upstream_error", err.Error())

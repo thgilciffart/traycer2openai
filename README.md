@@ -315,8 +315,16 @@ CONTRACT.md      verified upstream wire protocol
 ## Tests
 
 ```bash
-go test ./...   # translation and streaming transform
+go test ./...                                  # unit: translation, streaming, schema scrubbing
+python3 scripts/conformance.py                 # live: 22 end-to-end checks against the proxy
+MODEL=gemini-3.8-flash python3 scripts/conformance.py
 ```
+
+The live suite covers text, streaming, usage accounting, 22 rich tool schemas (the
+shape that made T3 Code fail with `400 Unknown name "exclusiveMaximum"`), tool-call
+replay, streamed tool calls, sampling, stop sequences, JSON mode, JSON schema mode,
+image input, multi-turn history, small `max_tokens`, and clean error surfaces for
+credit-gated and unknown models.
 
 The stream transform is also exercised end to end against a fake upstream that speaks the
 Responses wire format, and against the official OpenAI SDK (v7.x) for `models.list`,
