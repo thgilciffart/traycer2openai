@@ -134,6 +134,72 @@ Poll no faster than `interval` seconds (default 5) and stop at `expires_in` (def
 resulting `refreshToken` is a normal long-lived one, so this is the clean way to add an account
 that the proxy then keeps warm by itself.
 
+## Gemini is a different route, not the OpenAI proxy
+
+This is the single most important thing about Traycer's inference surface. Gemini
+models are **not** served by `/inference/openai/responses`. They have their own
+native route, and the two are billed differently: an account with no Traycer
+inference credits returns `402 OUT_OF_CREDITS` on the OpenAI route while the
+Gemini route answers `200` on the very same token.
+
+```
+POST https://server.traycer.ai/inference/gemini/models/<model>:streamGenerateContent?alt=sse
+authorization: Bearer <access token>
+x-traycer-account-context: PERSONAL          <- plain string here, not the JSON form
+content-type: application/json
+accept: */*
+```
+
+The body is raw Gemini, not OpenAI:
+
+```json
+{
+  "contents": [
+    {"role": "user",  "parts": [{"text": "..."}]},
+    {"role": "model", "parts": [{"functionCall": {"id": "...", "name": "...", "args": {}},
+                                 "thoughtSignature": "..."}]},
+    {"role": "user",  "parts": [{"functionResponse": {"id": "...", "name": "...",
+                                 "response": {"name": "...", "content": "..."}}}]}
+  ],
+  "systemInstruction": {"parts": [{"text": "..."}]},
+  "generationConfig": {"maxOutputTokens": 32000,
+                       "thinkingConfig": {"includeThoughts": true, "thinkingLevel": "medium"}},
+  "tools": [{"functionDeclarations": [{"name": "...", "description": "...", "parameters": {}}]}],
+  "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}
+}
+```
+
+The response is Gemini SSE, one `data:` object per event:
+
+```
+data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"index":0}],
+       "usageMetadata":{"promptTokenCount":25819,"candidatesTokenCount":1,...},
+       "modelVersion":"gemini-3.8-flash","responseId":"..."}
+data: {"candidates":[{"content":{"parts":[{"text":" there!"}]},...,"finishReason":"STOP"}],
+       "usageMetadata":{...}}
+```
+
+Notes that cost real debugging time:
+
+- **Thought signatures are mandatory on replay.** Gemini rejects a `functionCall`
+  part with no `thoughtSignature` (`Function call is missing a thought_signature`)
+  even when replaying a call the model itself made. The signature is validated
+  cryptographically: dummy base64 gives `Corrupted thought signature`. The only
+  accepted constants are absent (rejected) or the sentinel
+  `skip_thought_signature_validator`, which Traycer's own host sends. This proxy
+  prefers the real signature captured from the response that produced the call and
+  falls back to that sentinel.
+- **Thinking spends the output budget.** `maxOutputTokens: 32` can yield empty
+  text because `thoughtsTokenCount` consumes the allowance. Setting
+  `thinkingConfig.thinkingBudget: 0` for small budgets fixes it deterministically.
+- **`thinkingLevel` accepts `low`/`medium`/`high` only.** `minimal` returns
+  `400 Thinking level MINIMAL is not supported`.
+- Gemini rejects JSON Schema keywords in function declarations
+  (`additionalProperties`, `$schema`, `$defs`, `$id`), so they are stripped.
+- One user turn can cost tens of thousands of prompt tokens because the whole
+  conversation is resent. A one word message measured 25,819 prompt tokens, 23,758
+  of them served from Gemini's implicit cache.
+
 ## Model catalog
 
 ```

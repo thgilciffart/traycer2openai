@@ -117,6 +117,19 @@ func (u *Upstream) Responses(ctx context.Context, a *Account, body []byte) (*htt
 	return wireDo(u, req)
 }
 
+// GeminiStream posts a native Gemini generateContent body to Traycer's gemini
+// route. That route is billed against the account's plan rather than Traycer
+// inference credits, so it works when /inference/openai/responses returns 402.
+func (u *Upstream) GeminiStream(ctx context.Context, a *Account, model string, body []byte) (*http.Response, error) {
+	req, err := wireNewRequest(ctx, http.MethodPost, geminiURL(u.Server, model), bytes.NewReader(body), a)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "*/*")
+	req.Header.Set("accept-encoding", "identity")
+	return wireDo(u, req)
+}
+
 type wireUpstreamModel struct {
 	ID                        string `json:"id"`
 	Name                      string `json:"name"`

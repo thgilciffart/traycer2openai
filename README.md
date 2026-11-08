@@ -126,6 +126,22 @@ Auth is also skipped when `LOGIN_TOKEN` is left empty, but then the dashboard is
 is only sane on loopback. The startup banner warns if the bind address is not loopback and auth
 is effectively off.
 
+### Gemini works even without Traycer credits
+
+Gemini models are served on a **native Gemini route**, not through Traycer's OpenAI
+proxy, and the two bill differently. On an account with zero Traycer inference
+credits:
+
+```
+gemini-3.8-flash  /  gemini-4-argon   ->  200, real completions
+every other model                     ->  402 OUT_OF_CREDITS
+```
+
+The proxy detects Gemini models from the catalog's `provider` field (and by name
+prefix) and translates to Gemini's own request shape instead. Everything else still
+goes through `/inference/openai/responses`. See `CONTRACT.md` for the full contract,
+including the mandatory `thoughtSignature` on replayed tool calls.
+
 `/v1/models` returns Traycer's own model ids (`gemini-3.8-flash`, `gpt-6-astra`,
 `claude-opus-5-5`, ...). Upstream ids such as `gpt-4o` do not exist here.
 

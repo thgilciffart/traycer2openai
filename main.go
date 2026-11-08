@@ -40,6 +40,7 @@ type Server struct {
 	modelsErr error
 
 	devices *deviceAttempts
+	sigs    *sigCache
 
 	logger *log.Logger
 }
@@ -62,6 +63,7 @@ func main() {
 		log:     NewReqLog(cfg.RequestLogSize),
 		started: time.Now(),
 		devices: newDeviceAttempts(),
+		sigs:    newSigCache(),
 		logger:  logger,
 	}
 
@@ -289,6 +291,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.EnsureToken(ctx, acct); err != nil {
 		s.record(acct, model, stream, http.StatusUnauthorized, start, 0, 0, err.Error())
 		oaiError(w, http.StatusUnauthorized, "account_unavailable", "account "+acct.Name+": "+err.Error())
+		return
+	}
+
+	// Gemini models are served on Traycer's native Gemini route, not the OpenAI
+	// proxy, and are billed differently. Route them before translating.
+	if s.useGemini(ctx, model) {
+		s.handleGeminiChat(w, r, start, acct, model, body, stream)
 		return
 	}
 
@@ -531,6 +540,13 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		"models":   s.modelViews(models),
 		"requests": s.log.Snapshot(),
 	})
+}
+
+// modelsSnapshot returns the currently cached catalog without touching the network.
+func (s *Server) modelsSnapshot() []Model {
+	s.modelsMu.Lock()
+	defer s.modelsMu.Unlock()
+	return s.models
 }
 
 func (s *Server) modelViews(models []Model) []map[string]any {
