@@ -1,0 +1,9 @@
+# credentials and local state
+.env
+accounts.json
+accounts.json.tmp
+traycer2openai
+*.AppImage
+
+# build output
+/dist/
