@@ -189,6 +189,13 @@ Notes that cost real debugging time:
   `skip_thought_signature_validator`, which Traycer's own host sends. This proxy
   prefers the real signature captured from the response that produced the call and
   falls back to that sentinel.
+- **Never mix a real signature with the sentinel in one replay.** On a multi-call
+  turn upstream attaches the signature to only one part, so a replay that puts the
+  real signature on that call and the sentinel on its siblings is rejected with
+  `400 Corrupted thought signature` (observed live with parallel tool calls). An
+  all-sentinel replay is accepted. The proxy therefore uses real signatures only
+  when every tool call in the replayed message has one cached, and otherwise sends
+  the sentinel on all of them.
 - **Thinking spends the output budget.** `maxOutputTokens: 32` can yield empty
   text because `thoughtsTokenCount` consumes the allowance. Setting
   `thinkingConfig.thinkingBudget: 0` for small budgets fixes it deterministically.

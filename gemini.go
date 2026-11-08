@@ -270,7 +270,32 @@ func ChatToGemini(body []byte, sigFor func(string) string) (out []byte, stream b
 			}
 		case "assistant":
 			parts := geminiTextParts(msg["content"])
-			for _, rawCall := range wireSlice(msg["tool_calls"]) {
+			rawCalls := wireSlice(msg["tool_calls"])
+			// Gemini validates thought signatures per response and rejects a
+			// replay that MIXES a real signature on some functionCall parts
+			// with the skip sentinel on others ("Corrupted thought signature",
+			// observed live with parallel tool calls, where upstream attaches
+			// the signature to only one part of the turn). So use real
+			// signatures only when every call in this message has one cached;
+			// otherwise use the sentinel for all of them (all-sentinel replays
+			// are accepted, verified against the live upstream).
+			realSigs := map[string]string{}
+			nCalls := 0
+			for _, rawCall := range rawCalls {
+				call := wireMap(rawCall)
+				if call == nil {
+					continue
+				}
+				nCalls++
+				id, _ := call["id"].(string)
+				if id != "" && sigFor != nil {
+					if s := sigFor(id); s != "" {
+						realSigs[id] = s
+					}
+				}
+			}
+			allReal := nCalls > 0 && len(realSigs) == nCalls
+			for _, rawCall := range rawCalls {
 				call := wireMap(rawCall)
 				fn := wireMap(call["function"])
 				if fn == nil {
@@ -295,7 +320,7 @@ func ChatToGemini(body []byte, sigFor func(string) string) (out []byte, stream b
 				// that produced the call; fall back to Traycer's own sentinel,
 				// which the host also uses, when we no longer have it.
 				sig := ""
-				if sigFor != nil {
+				if allReal && sigFor != nil {
 					sig = sigFor(id)
 				}
 				if sig == "" {
