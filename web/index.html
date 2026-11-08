@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#fdfdfc" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
+  <title>traycer2openai</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%23111'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='15' fill='%23fdfdfc' text-anchor='middle'%3Et%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="column">
+    <section class="auth" id="auth" aria-labelledby="auth-title" hidden>
+      <h1 class="wordmark" id="auth-title">traycer2openai</h1>
+      <p class="auth-lede">A local OpenAI-compatible proxy for Traycer inference.</p>
+      <form class="auth-form" id="login-form" novalidate>
+        <label class="field-label" for="login-token">Token</label>
+        <input class="text-input" id="login-token" name="token" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" aria-describedby="login-error" required>
+        <p class="error" id="login-error" aria-live="polite" hidden></p>
+        <button class="btn" id="login-submit" type="submit">Sign In</button>
+      </form>
+    </section>
+
+    <div id="app" hidden>
+      <header class="masthead">
+        <div class="mast-left">
+          <h1 class="wordmark">traycer2openai</h1>
+          <p class="mast-meta"><span id="meta-version"></span><span class="sep" aria-hidden="true"> · </span><span id="meta-upstream"></span></p>
+        </div>
+        <button class="word-btn signout" id="signout" type="button">Sign Out</button>
+      </header>
+
+      <p class="conn" id="conn" aria-live="polite" hidden></p>
+
+      <section class="block" aria-labelledby="endpoint-label">
+        <div class="block-head">
+          <h2 class="label" id="endpoint-label">Endpoint</h2>
+        </div>
+        <div class="kv">
+          <span class="kv-key">Base URL</span>
+          <code class="kv-val" id="base-url"></code>
+          <button class="word-btn copy" id="copy-base-url" type="button" data-copy="base-url" aria-label="Copy Base URL">Copy</button>
+        </div>
+        <div class="kv">
+          <span class="kv-key">API key</span>
+          <code class="kv-val" id="api-key"></code>
+          <button class="word-btn copy" id="copy-api-key" type="button" data-copy="api-key" aria-label="Copy API key">Copy</button>
+        </div>
+        <p class="routes"><code>POST /v1/chat/completions</code><span class="sep" aria-hidden="true"> · </span><code>GET /v1/models</code></p>
+      </section>
+
+      <section class="block" aria-labelledby="accounts-label">
+        <div class="block-head">
+          <h2 class="label" id="accounts-label">Accounts</h2>
+          <span class="count" id="accounts-count"></span>
+        </div>
+        <p class="error" id="accounts-error" aria-live="polite" hidden></p>
+
+        <div class="device" id="device-area">
+          <form class="device-form" id="device-form" novalidate>
+            <div class="field">
+              <label class="field-label" for="device-name">Label <span class="opt">optional</span></label>
+              <input class="text-input" id="device-name" name="name" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. work laptop">
+            </div>
+            <button class="btn" id="device-start" type="submit">Sign in with Traycer</button>
+          </form>
+          <div class="device-panel" id="device-panel" hidden>
+            <div class="device-pending" id="device-pending">
+              <p class="device-code-row">
+                <code class="device-code" id="device-code"></code>
+                <button class="word-btn" id="device-copy" type="button">Copy Code</button>
+              </p>
+              <p class="device-link-row">
+                <a class="btn-outline" id="device-link" href="https://traycer.ai/device" target="_blank" rel="noopener">Open Traycer to Approve</a>
+              </p>
+              <p class="device-wait" aria-live="polite"><span class="pulse-dot" aria-hidden="true"></span><span id="device-wait-text">Waiting for approval</span></p>
+              <p class="device-count" id="device-count"></p>
+            </div>
+            <div class="device-failed" id="device-failed" hidden>
+              <p class="device-failed-text" id="device-failed-text" aria-live="polite"></p>
+              <p class="device-failed-actions">
+                <button class="btn" id="device-retry" type="button">Try Again</button>
+              </p>
+            </div>
+            <p class="error" id="device-error" aria-live="polite" hidden></p>
+            <p class="device-cancel-row">
+              <button class="word-btn" id="device-cancel" type="button">Cancel</button>
+            </p>
+          </div>
+        </div>
+
+        <ul class="accounts" id="accounts-list" aria-labelledby="accounts-label"></ul>
+        <details class="add" id="add-details">
+          <summary>Add Account Manually</summary>
+          <form class="form" id="add-form" novalidate>
+            <div class="field">
+              <label class="field-label" for="add-name">Name</label>
+              <input class="text-input" id="add-name" name="name" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="field">
+              <label class="field-label" for="add-access">Access token</label>
+              <textarea class="textarea" id="add-access" name="accessToken" rows="2" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="tokens-hint"></textarea>
+            </div>
+            <div class="field">
+              <label class="field-label" for="add-refresh">Refresh token <span class="opt">optional</span></label>
+              <input class="text-input mono-input" id="add-refresh" name="refreshToken" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="tokens-hint">
+            </div>
+            <div class="field">
+              <label class="field-label" for="add-credpath">Credentials file <span class="opt">instead of tokens</span></label>
+              <input class="text-input mono-input" id="add-credpath" name="credentialPath" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="~/.traycer/host/auth/credentials.json" aria-describedby="tokens-hint">
+            </div>
+            <p class="error" id="add-error" aria-live="polite" hidden></p>
+            <button class="btn" id="add-submit" type="submit">Add Account</button>
+          </form>
+          <p class="hint" id="tokens-hint">Paste tokens from <code>~/.traycer/host/auth/credentials.json</code>, or point at that file to borrow the desktop app's credentials. Do not do both for one account.</p>
+        </details>
+      </section>
+
+      <section class="block" aria-labelledby="models-label">
+        <div class="block-head">
+          <h2 class="label" id="models-label">Models</h2>
+        </div>
+        <label class="sr-only" for="model-filter">Filter models</label>
+        <input class="filter" id="model-filter" type="search" placeholder="Filter models" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <ul class="models" id="models-list" aria-labelledby="models-label"></ul>
+        <p class="empty-line" id="models-empty" hidden>no matches</p>
+      </section>
+
+      <section class="block" aria-labelledby="requests-label">
+        <div class="block-head">
+          <h2 class="label" id="requests-label">Requests</h2>
+          <span class="count" id="requests-count"></span>
+        </div>
+        <ul class="requests" id="requests-list" aria-labelledby="requests-label"></ul>
+        <p class="empty serif" id="requests-empty" hidden>No requests yet.</p>
+      </section>
+
+      <footer class="footer">
+        <span><span class="mono" id="endpoint-addr"></span><span class="sep" aria-hidden="true"> · </span><span id="uptime"></span></span>
+        <span>MIT</span>
+      </footer>
+    </div>
+
+    <span class="sr-only" id="copy-live" aria-live="polite"></span>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
