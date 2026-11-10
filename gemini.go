@@ -383,8 +383,15 @@ func ChatToGemini(body []byte, sigFor func(string) string) (out []byte, stream b
 	// Thinking is billed from the same output budget, so a client asking for a
 	// small max_tokens otherwise gets an empty reply: the whole allowance goes to
 	// thoughts. Disable thinking for small budgets unless the client asked for it.
-	if effort, ok := req["reasoning_effort"].(string); ok && effort != "" {
-		gen["thinkingConfig"] = map[string]any{"thinkingLevel": geminiEffort(effort), "includeThoughts": false}
+	// When an effort is requested, ask for the thought summaries as well: the
+	// model already thinks (and bills for it) with includeThoughts=false, so this
+	// only makes the reasoning visible to the client.
+	if effort := requestEffort(req); effort != "" {
+		if effort == "none" {
+			gen["thinkingConfig"] = map[string]any{"thinkingBudget": 0, "includeThoughts": false}
+		} else {
+			gen["thinkingConfig"] = map[string]any{"thinkingLevel": geminiEffort(effort), "includeThoughts": true}
+		}
 	} else if n, ok := numAsInt(gen["maxOutputTokens"]); ok && n > 0 && n < 512 {
 		gen["thinkingConfig"] = map[string]any{"thinkingBudget": 0, "includeThoughts": false}
 	}
@@ -468,11 +475,13 @@ type geminiCall struct {
 }
 
 type geminiDelta struct {
-	Text   string
-	Parts  []geminiCall
-	Finish string
-	In     int
-	Out    int
+	Text     string
+	Thought  string
+	Parts    []geminiCall
+	Finish   string
+	In       int
+	Out      int
+	Thoughts int
 }
 
 var geminiFinish = map[string]string{
@@ -507,8 +516,12 @@ func parseGeminiEvent(payload []byte) (geminiDelta, error) {
 				if part == nil {
 					continue
 				}
-				// Skip thinking parts: they are not assistant-visible content.
+				// Thinking parts are not assistant-visible text, but they are the
+				// model's reasoning, so collect them separately.
 				if thought, _ := part["thought"].(bool); thought {
+					if s, ok := part["text"].(string); ok {
+						d.Thought += s
+					}
 					continue
 				}
 				if s, ok := part["text"].(string); ok && s != "" {
@@ -532,6 +545,7 @@ func parseGeminiEvent(payload []byte) (geminiDelta, error) {
 	if u := wireMap(env["usageMetadata"]); u != nil {
 		d.In = wireNumInt(u["promptTokenCount"])
 		d.Out = wireNumInt(u["candidatesTokenCount"])
+		d.Thoughts = wireNumInt(u["thoughtsTokenCount"])
 	}
 	return d, nil
 }
@@ -543,6 +557,7 @@ func StreamGeminiToChat(w io.Writer, r io.Reader, model string, sigs *sigCache) 
 	toolIndex := 0
 	sawTool := false
 	finish := "stop"
+	reasoningTokens := 0
 
 	writeChunk := func(delta map[string]any, fr any, usage map[string]any) error {
 		chunk := map[string]any{
@@ -590,11 +605,23 @@ func StreamGeminiToChat(w io.Writer, r io.Reader, model string, sigs *sigCache) 
 		if d.In > 0 {
 			inTokens = d.In
 		}
-		if d.Out > 0 {
-			outTokens = d.Out
+		if d.Thoughts > 0 {
+			reasoningTokens = d.Thoughts
+		}
+		// Gemini reports reasoning in thoughtsTokenCount, outside
+		// candidatesTokenCount; OpenAI counts it inside completion_tokens.
+		// Later events may repeat only one of the two, so keep the last seen
+		// reasoning count until the stream ends.
+		if d.Out > 0 || reasoningTokens > 0 {
+			outTokens = d.Out + reasoningTokens
 		}
 		if d.Finish != "" {
 			finish = d.Finish
+		}
+		if d.Thought != "" {
+			if err := writeChunk(map[string]any{"reasoning_content": d.Thought}, nil, nil); err != nil {
+				return inTokens, outTokens, err
+			}
 		}
 		if d.Text != "" {
 			if err := writeChunk(map[string]any{"content": d.Text}, nil, nil); err != nil {
@@ -636,6 +663,9 @@ func StreamGeminiToChat(w io.Writer, r io.Reader, model string, sigs *sigCache) 
 			"prompt_tokens": inTokens, "completion_tokens": outTokens,
 			"total_tokens": inTokens + outTokens,
 		}
+		if reasoningTokens > 0 {
+			usage["completion_tokens_details"] = map[string]any{"reasoning_tokens": reasoningTokens}
+		}
 	}
 	if err := writeChunk(map[string]any{}, finish, usage); err != nil {
 		return inTokens, outTokens, err
@@ -652,10 +682,10 @@ func StreamGeminiToChat(w io.Writer, r io.Reader, model string, sigs *sigCache) 
 // GeminiToChat aggregates the native SSE stream into one chat.completion, for
 // clients that asked for stream=false.
 func GeminiToChat(r io.Reader, model string, sigs *sigCache) ([]byte, int, int, error) {
-	var content strings.Builder
+	var content, reasoning strings.Builder
 	toolCalls := []any{}
 	finish := "stop"
-	inTok, outTok := 0, 0
+	inTok, outTok, reasoningTok := 0, 0, 0
 
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
@@ -675,12 +705,16 @@ func GeminiToChat(r io.Reader, model string, sigs *sigCache) ([]byte, int, int, 
 		if d.In > 0 {
 			inTok = d.In
 		}
-		if d.Out > 0 {
-			outTok = d.Out
+		if d.Thoughts > 0 {
+			reasoningTok = d.Thoughts
+		}
+		if d.Out > 0 || reasoningTok > 0 {
+			outTok = d.Out + reasoningTok
 		}
 		if d.Finish != "" {
 			finish = d.Finish
 		}
+		reasoning.WriteString(d.Thought)
 		content.WriteString(d.Text)
 		for _, call := range d.Parts {
 			args, _ := json.Marshal(call.Args)
@@ -713,6 +747,9 @@ func GeminiToChat(r io.Reader, model string, sigs *sigCache) ([]byte, int, int, 
 	} else {
 		message["content"] = nil
 	}
+	if reasoning.Len() > 0 {
+		message["reasoning_content"] = reasoning.String()
+	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
 	}
@@ -724,12 +761,32 @@ func GeminiToChat(r io.Reader, model string, sigs *sigCache) ([]byte, int, int, 
 		}},
 	}
 	if inTok > 0 || outTok > 0 {
-		out["usage"] = map[string]any{
+		usage := map[string]any{
 			"prompt_tokens": inTok, "completion_tokens": outTok, "total_tokens": inTok + outTok,
 		}
+		if reasoningTok > 0 {
+			usage["completion_tokens_details"] = map[string]any{"reasoning_tokens": reasoningTok}
+		}
+		out["usage"] = usage
 	}
 	b, err := json.Marshal(out)
 	return b, inTok, outTok, err
+}
+
+// requestEffort reads OpenAI's reasoning_effort string and accepts the
+// Responses-style {"reasoning":{"effort":...}} object as an alias.
+func requestEffort(req map[string]any) string {
+	if s, ok := req["reasoning_effort"].(string); ok {
+		if v := strings.ToLower(strings.TrimSpace(s)); v != "" {
+			return v
+		}
+	}
+	if r := wireMap(req["reasoning"]); r != nil {
+		if s, ok := r["effort"].(string); ok {
+			return strings.ToLower(strings.TrimSpace(s))
+		}
+	}
+	return ""
 }
 
 // geminiEffort clamps OpenAI reasoning effort names onto the levels Gemini accepts.

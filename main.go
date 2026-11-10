@@ -449,15 +449,22 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type oaiModel struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Created int64  `json:"created"`
-		OwnedBy string `json:"owned_by"`
+		ID            string   `json:"id"`
+		Object        string   `json:"object"`
+		Created       int64    `json:"created"`
+		OwnedBy       string   `json:"owned_by"`
+		Efforts       []string `json:"efforts,omitempty"`
+		DefaultEffort string   `json:"default_reasoning_effort,omitempty"`
+		Reasoning     bool     `json:"supports_reasoning"`
 	}
 	now := time.Now().Unix()
 	data := make([]oaiModel, 0, len(models))
 	for _, m := range models {
-		data = append(data, oaiModel{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider})
+		data = append(data, oaiModel{
+			ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider,
+			Efforts: m.Efforts, DefaultEffort: m.DefaultEffort,
+			Reasoning: len(m.Efforts) > 0,
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }

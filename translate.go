@@ -361,6 +361,13 @@ func ChatToResponses(body []byte) (out []byte, stream bool, err error) {
 			}
 		}
 	}
+	// Pass a Responses-style reasoning object through when the client already
+	// speaks that shape.
+	if _, ok := outReq["reasoning"]; !ok {
+		if r := wireMap(req["reasoning"]); r != nil {
+			outReq["reasoning"] = r
+		}
+	}
 
 	out, err = json.Marshal(outReq)
 	if err != nil {
@@ -378,7 +385,7 @@ func ResponsesToChat(resp []byte, model string) ([]byte, error) {
 		return nil, errors.New(wireErrText(code, msg))
 	}
 
-	var content strings.Builder
+	var content, reasoning strings.Builder
 	toolCalls := []any{}
 	for _, rawItem := range wireSlice(r["output"]) {
 		item := wireMap(rawItem)
@@ -398,6 +405,8 @@ func ResponsesToChat(resp []byte, model string) ([]byte, error) {
 					}
 				}
 			}
+		case "reasoning":
+			appendReasoning(&reasoning, item)
 		case "function_call":
 			callID, _ := item["call_id"].(string)
 			name, _ := item["name"].(string)
@@ -428,6 +437,9 @@ func ResponsesToChat(resp []byte, model string) ([]byte, error) {
 	} else {
 		message["content"] = nil
 	}
+	if reasoning.Len() > 0 {
+		message["reasoning_content"] = reasoning.String()
+	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
 	}
@@ -446,13 +458,48 @@ func ResponsesToChat(resp []byte, model string) ([]byte, error) {
 	if usage := wireMap(r["usage"]); usage != nil {
 		in := wireNumInt(usage["input_tokens"])
 		outT := wireNumInt(usage["output_tokens"])
-		completion["usage"] = map[string]any{
+		u := map[string]any{
 			"prompt_tokens":     in,
 			"completion_tokens": outT,
 			"total_tokens":      in + outT,
 		}
+		if det := wireMap(usage["output_tokens_details"]); det != nil {
+			if n := wireNumInt(det["reasoning_tokens"]); n > 0 {
+				u["completion_tokens_details"] = map[string]any{"reasoning_tokens": n}
+			}
+		}
+		completion["usage"] = u
 	}
 	return json.Marshal(completion)
+}
+
+// appendReasoning flattens a Responses reasoning item into one string: the
+// visible summary when present, otherwise the raw reasoning content.
+func appendReasoning(b *strings.Builder, item map[string]any) {
+	var texts []string
+	for _, rawPart := range wireSlice(item["summary"]) {
+		if part := wireMap(rawPart); part != nil {
+			if s, ok := part["text"].(string); ok && s != "" {
+				texts = append(texts, s)
+			}
+		}
+	}
+	if len(texts) == 0 {
+		for _, rawPart := range wireSlice(item["content"]) {
+			if part := wireMap(rawPart); part != nil {
+				if s, ok := part["text"].(string); ok && s != "" {
+					texts = append(texts, s)
+				}
+			}
+		}
+	}
+	if len(texts) == 0 {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString(strings.Join(texts, "\n\n"))
 }
 
 func StreamResponsesToChat(w io.Writer, r io.Reader, model string) (inTokens, outTokens int, err error) {
@@ -463,6 +510,7 @@ func StreamResponsesToChat(w io.Writer, r io.Reader, model string) (inTokens, ou
 	itemIndex := map[string]int{}
 	toolCalls := 0
 	sawToolCall := false
+	reasoningTokens := 0
 
 	writeChunk := func(delta map[string]any, finish any, usage map[string]any) error {
 		chunk := map[string]any{
@@ -524,6 +572,12 @@ func StreamResponsesToChat(w io.Writer, r io.Reader, model string) (inTokens, ou
 				return nil
 			}
 			return writeChunk(map[string]any{"content": delta}, nil, nil)
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+			delta, _ := ev["delta"].(string)
+			if delta == "" {
+				return nil
+			}
+			return writeChunk(map[string]any{"reasoning_content": delta}, nil, nil)
 		case "response.output_item.added":
 			item := wireMap(ev["item"])
 			if item == nil {
@@ -569,6 +623,9 @@ func StreamResponsesToChat(w io.Writer, r io.Reader, model string) (inTokens, ou
 				if u := wireMap(resp["usage"]); u != nil {
 					inTokens = wireNumInt(u["input_tokens"])
 					outTokens = wireNumInt(u["output_tokens"])
+					if det := wireMap(u["output_tokens_details"]); det != nil {
+						reasoningTokens = wireNumInt(det["reasoning_tokens"])
+					}
 				}
 			}
 			return errTerminal
@@ -633,6 +690,9 @@ loop:
 			"prompt_tokens":     inTokens,
 			"completion_tokens": outTokens,
 			"total_tokens":      inTokens + outTokens,
+		}
+		if reasoningTokens > 0 {
+			usage["completion_tokens_details"] = map[string]any{"reasoning_tokens": reasoningTokens}
 		}
 	}
 	if err := writeChunk(map[string]any{}, finish, usage); err != nil {

@@ -163,6 +163,27 @@ including the mandatory `thoughtSignature` on replayed tool calls.
 Cheapest models to test with: `gemini-3.8-flash` (default), `deepseek-v4-flash`,
 `gemini-4-argon`. Prefer flash tiers while validating, since credits are consumed per call.
 
+### Reasoning / thinking
+
+`reasoning_effort` (`minimal | low | medium | high`, plus `none` to disable) maps to
+Gemini's `thinkingLevel`; `minimal` clamps to `low`, `xhigh`/`max` to `high`. The
+Responses-style `{"reasoning":{"effort":"..."}}` object is accepted as an alias on
+`/v1/chat/completions`.
+
+When an effort is set, the proxy also asks for thought summaries
+(`thinkingConfig.includeThoughts: true`) and returns them as `reasoning_content` —
+on the message for non-streaming calls, as deltas when streaming. Reasoning tokens
+land in `usage.completion_tokens_details.reasoning_tokens` and are counted inside
+`completion_tokens`, matching OpenAI's semantics (Gemini reports them separately in
+`thoughtsTokenCount`). For non-Gemini models the same fields are filled from the
+Responses API's `reasoning` items and `output_tokens_details`.
+
+Thought summaries are best-effort upstream: on some turns Gemini spends thinking
+tokens but returns no summary, in which case `reasoning_content` is simply absent
+while the reasoning token count is still reported. `/v1/models` advertises
+`supports_reasoning`, `efforts` and `default_reasoning_effort` so clients can offer
+the low/medium/high choice.
+
 ## Capturing Traycer's traffic with mitmproxy
 
 You do not need this to build or run the proxy: `CONTRACT.md` already has the endpoints, headers

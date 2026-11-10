@@ -602,3 +602,113 @@ func TestTranslateStreamFlushes(t *testing.T) {
 		t.Error("Flush was never called on a flushing writer")
 	}
 }
+
+func TestTranslateResponsesReasoning(t *testing.T) {
+	t.Run("summary and reasoning tokens", func(t *testing.T) {
+		resp := `{"id":"resp_1","status":"completed","output":[
+			{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"pondered"}]},
+			{"type":"reasoning","id":"rs_2","summary":[{"type":"summary_text","text":"decided"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],
+			"usage":{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"reasoning_tokens":4}}}`
+		out, err := ResponsesToChat([]byte(resp), "gpt-6-astra")
+		if err != nil {
+			t.Fatalf("ResponsesToChat: %v", err)
+		}
+		m := tstObj(t, out)
+		msg := wireMap(tstChoice(t, m)["message"])
+		if msg["reasoning_content"] != "pondered\n\ndecided" {
+			t.Errorf("reasoning_content = %v", msg["reasoning_content"])
+		}
+		if msg["content"] != "done" {
+			t.Errorf("content = %v", msg["content"])
+		}
+		usage := wireMap(m["usage"])
+		if wireNumInt(usage["completion_tokens"]) != 9 {
+			t.Errorf("usage = %s", tstJSON(usage))
+		}
+		if got := wireNumInt(wireMap(usage["completion_tokens_details"])["reasoning_tokens"]); got != 4 {
+			t.Errorf("reasoning_tokens = %d, want 4", got)
+		}
+	})
+
+	t.Run("content fallback when summary absent", func(t *testing.T) {
+		resp := `{"status":"completed","output":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"raw trace"}]},{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
+		out, err := ResponsesToChat([]byte(resp), "m")
+		if err != nil {
+			t.Fatalf("ResponsesToChat: %v", err)
+		}
+		msg := wireMap(tstChoice(t, tstObj(t, out))["message"])
+		if msg["reasoning_content"] != "raw trace" {
+			t.Errorf("reasoning_content = %v", msg["reasoning_content"])
+		}
+	})
+
+	t.Run("no reasoning leaves field out", func(t *testing.T) {
+		resp := `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
+		out, err := ResponsesToChat([]byte(resp), "m")
+		if err != nil {
+			t.Fatalf("ResponsesToChat: %v", err)
+		}
+		msg := wireMap(tstChoice(t, tstObj(t, out))["message"])
+		if _, ok := msg["reasoning_content"]; ok {
+			t.Error("reasoning_content should be omitted")
+		}
+	})
+}
+
+func TestTranslateStreamResponsesReasoning(t *testing.T) {
+	fixture := `event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"think "}
+
+data: {"type":"response.reasoning_text.delta","delta":"harder"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"42"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":8,"output_tokens_details":{"reasoning_tokens":5}}}}
+
+data: [DONE]
+`
+	var buf bytes.Buffer
+	in, out, err := StreamResponsesToChat(&buf, strings.NewReader(fixture), "m")
+	if err != nil {
+		t.Fatalf("StreamResponsesToChat: %v", err)
+	}
+	if in != 3 || out != 8 {
+		t.Errorf("tokens = %d/%d, want 3/8", in, out)
+	}
+	var reasoning, content string
+	var final map[string]any
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			continue
+		}
+		chunk := tstObj(t, []byte(payload))
+		ch := tstChoice(t, chunk)
+		delta := wireMap(ch["delta"])
+		if s, ok := delta["reasoning_content"].(string); ok {
+			reasoning += s
+		}
+		if s, ok := delta["content"].(string); ok {
+			content += s
+		}
+		if ch["finish_reason"] == "stop" {
+			final = chunk
+		}
+	}
+	if reasoning != "think harder" {
+		t.Errorf("reasoning = %q", reasoning)
+	}
+	if content != "42" {
+		t.Errorf("content = %q", content)
+	}
+	usage := wireMap(final["usage"])
+	if got := wireNumInt(wireMap(usage["completion_tokens_details"])["reasoning_tokens"]); got != 5 {
+		t.Errorf("reasoning_tokens = %d, want 5", got)
+	}
+}
